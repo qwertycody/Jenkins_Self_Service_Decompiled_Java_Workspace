@@ -49,6 +49,7 @@ pipeline {
     agent any
 
     stages {
+
         stage('Upload File') {
             steps {
                 script{
@@ -141,6 +142,24 @@ pipeline {
                 }
             }
         }
+
+        stage('Workspace Cleanup') {
+            steps {
+                script {
+                    message = "Extension of Workspace Life"
+                    warningMessage = "Termination, deletion, and cleanup of Workspace"
+                    hoursToSleep = 24
+                    hoursToWaitBeforeTimeout = 1
+                    extendWorkspace = timeout(message, warningMessage, hoursToSleep, hoursToWaitBeforeTimeout, "HOURS")
+
+                    if(extendWorkspace == false)
+                    {
+                        sshCommand remote: global_remote, command: "docker stop " + global_dockerContainer_id
+                        sshCommand remote: global_remote, command: "docker rm " + global_dockerContainer_id
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -210,6 +229,78 @@ def getBuildUserEmail(){
     wrap([$class: 'BuildUser']) {
         return env.BUILD_USER_EMAIL
     }
+}
+
+
+
+def timeout(message, warningMessage, timeToSleep, timeToSleepBeforeTimeout, timeUnits) {
+    yesNo = false
+    yesNoTimeout = false
+    
+    try {
+        echo "Waiting before prompting user for input..."
+
+        sleep(time:timeToSleep,unit:timeUnits)
+        
+        timeWarning = timeToSleepBeforeTimeout + " " + timeUnits
+
+        email_notifyActionRequired(message, warningMessage, timeWarning)
+
+        timeout(time: timeToSleepBeforeTimeout, unit: timeUnits) 
+        {
+            yesNo = input (
+                            id: 'Proceed1', 
+                            message: message, 
+                            parameters: [
+                                            [
+                                                $class: 'BooleanParameterDefinition',
+                                                defaultValue: true, 
+                                                description: '', 
+                                                name: message
+                                            ]
+                                        ]
+                        )
+        }
+
+    } catch(err) { // timeout reached or input false
+        def user = err.getCauses()[0].getUser()
+        if('SYSTEM' == user.toString()) { // SYSTEM means timeout.
+            yesNoTimeout = false
+            yesNo = false
+        } else {
+            yesNo = false
+            echo "Aborted by: [${user}]"
+        }
+    }
+    
+    if(yesNo == true)
+    {
+        timeout(message, warningMessage, timeToSleep, timeToSleepBeforeTimeout, timeUnits)
+    }
+
+    return yesNo
+}
+
+def email_notifyActionRequired(message, warningMessage, timeWarning) {
+
+  // send to email
+  emailext (
+      subject: "[JENKINS] Action Required within "+ timeWarning + " - " + message,
+      body: """
+Hello,
+
+Please navigate to the below URL to address the requested action.
+- ${env.BUILD_URL}input
+
+Failure to do so within ${timeWarning} will result in the below conditions:
+- ${warningMessage}
+
+Thanks,
+Jenkins Automated System
+
+""",
+      to: getBuildUserEmail()
+    )
 }
 
 def email_notifyUploadRequirement() {
